@@ -2,7 +2,7 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report, the setup of unit limits, the limit stop and the desktop page.**
+**Design for [#584](https://github.com/mickey-kras/llm-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report, the setup of unit limits, the limit stop and the desktop page.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
 - Escape routes are advisory warnings. Setup discovery reports them. They do not block limits, and no runtime check reads them. See [escape route report](#escape-route-report).

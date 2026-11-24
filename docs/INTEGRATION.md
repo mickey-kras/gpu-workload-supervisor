@@ -19,16 +19,16 @@
 | Proxy and adapters | Route gates, forwarding, bounded protocol checks, exact-body authorization, optional requester authentication, work registration and terminal evidence. No semantic content policy |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
 | External gateway | Authentication, request and response policy and content validation |
-| [Model checks](MODEL-CHECKS.md) | File allowlist, chat template pin and results bound to file digests. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan |
+| [Model checks](MODEL-CHECKS.md) | File allowlist, chat template pin and results bound to file digests. [#585](https://github.com/mickey-kras/llm-workload-supervisor/issues/585) plans the behavioral scan |
 | Trainer adapter | Recipes and checkpoint contents. The controller owns finite-job lifecycle |
 
-Demand records prove admission. They do not schedule workflows or replay uncertain execution. Integrations must preserve admission, terminal evidence and runtime-bypass prevention. Setup installs no broker or gateway. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a setup step that installs the pinned scanner after you confirm it. See [requester ingress](OPERATIONS.md#optional-requester-ingress) and [training](TRAINING.md#finite-training-jobs).
+Demand records prove admission. They do not schedule workflows or replay uncertain execution. Integrations must preserve admission, terminal evidence and runtime-bypass prevention. Setup installs no broker or gateway. [#585](https://github.com/mickey-kras/llm-workload-supervisor/issues/585) plans a setup step that installs the pinned scanner after you confirm it. See [requester ingress](OPERATIONS.md#optional-requester-ingress) and [training](TRAINING.md#finite-training-jobs).
 
 ### Model checks
 
-[Model checks](MODEL-CHECKS.md) has the file allowlist, chat template check, result store and launch gate. The checks read only local files. Setup runs the checks of a workload when the operator asks (`gpu-setup model-check`). The [launch gate](MODEL-CHECKS.md#launch-gate) refuses a vLLM launch when a stored result fails or its template differs from the pinned template. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan and the scan job.
+[Model checks](MODEL-CHECKS.md) has the file allowlist, chat template check, result store and launch gate. The checks read only local files. Setup runs the checks of a workload when the operator asks (`gpu-setup model-check`). The [launch gate](MODEL-CHECKS.md#launch-gate) refuses a vLLM launch when a stored result fails or its template differs from the pinned template. [#585](https://github.com/mickey-kras/llm-workload-supervisor/issues/585) plans the behavioral scan and the scan job.
 
-Setup shows the stored status. See [Status display](MODEL-CHECKS.md#status-display). [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans the rest of the result display. These checks cannot prove model safety.
+Setup shows the stored status. See [Status display](MODEL-CHECKS.md#status-display). [#583](https://github.com/mickey-kras/llm-workload-supervisor/issues/583) plans the rest of the result display. These checks cannot prove model safety.
 
 ### State model
 
@@ -488,7 +488,7 @@ Repository evidence: `internal/proxy/contract_integration_test.go`, `internal/su
 
 The state machine, fences, admission and drain remain authoritative. Unit ordering and completion cannot replace readiness, capacity, cgroup or GPU-release evidence.
 
-[#397](https://github.com/mickey-kras/gpu-workload-supervisor/issues/397) adds catalog-derived `Conflicts=` between owned units and `After=` only toward lexically earlier peers. One edge per pair avoids cycles. [systemd](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Conflicts=) stops conflicts before start in either direction. Keep `Restart=no`.
+[#397](https://github.com/mickey-kras/llm-workload-supervisor/issues/397) adds catalog-derived `Conflicts=` between owned units and `After=` only toward lexically earlier peers. One edge per pair avoids cycles. [systemd](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Conflicts=) stops conflicts before start in either direction. Keep `Restart=no`.
 
 Add no `StartLimit*`. Manual opposing starts can interrupt work. Arbitrary external units are outside this backstop.
 

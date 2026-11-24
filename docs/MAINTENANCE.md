@@ -214,7 +214,7 @@ Do not give it admin credentials.
 Find `ruleset_id` through `GET /repos/{owner}/{repo}/rules/branches/{branch}`, then run with an administrator’s local `gh` login:
 
 ```sh
-gh api repos/mickey-kras/gpu-workload-supervisor/rulesets/RULESET_ID --jq 'if has("bypass_actors") and .bypass_actors == [] then {repository: .source, ruleset_id: .id, updated_at: .updated_at, bypass_actors: []} else error("Administrator readback must show no bypass actors") end'
+gh api repos/mickey-kras/llm-workload-supervisor/rulesets/RULESET_ID --jq 'if has("bypass_actors") and .bypass_actors == [] then {repository: .source, ruleset_id: .id, updated_at: .updated_at, bypass_actors: []} else error("Administrator readback must show no bypass actors") end'
 ```
 
 Replace `RULESET_ID` with its numeric ID. Record the ID and verification in the rollout PR.

@@ -9,7 +9,7 @@
 
 The Debian package includes CLI, proxy, one-shot operator, GNOME extension and Gtk4 and Libadwaita setup. It requires GJS, Gtk4, Libadwaita and systemd. GNOME Shell 50 is the initial target.
 
-CI builds for Linux amd64 and arm64 do not qualify distributions or hosts. Before production controls, qualify real Shell 50 rendering, keyboard and accessibility, session restart, logout and login, NVIDIA, dependencies and package installation. Also qualify cross-version managed upgrade, complete rollback and fence rotation. Headless widget and protocol tests do not qualify the host: see [#146](https://github.com/mickey-kras/gpu-workload-supervisor/issues/146) and [#148](https://github.com/mickey-kras/gpu-workload-supervisor/issues/148).
+CI builds for Linux amd64 and arm64 do not qualify distributions or hosts. Before production controls, qualify real Shell 50 rendering, keyboard and accessibility, session restart, logout and login, NVIDIA, dependencies and package installation. Also qualify cross-version managed upgrade, complete rollback and fence rotation. Headless widget and protocol tests do not qualify the host: see [#146](https://github.com/mickey-kras/llm-workload-supervisor/issues/146) and [#148](https://github.com/mickey-kras/llm-workload-supervisor/issues/148).
 
 ### Install and configure
 
@@ -131,7 +131,7 @@ A managed launch can have a `serving` object in its owned launch. Without the ob
 | `--max-num-seqs` | Not set | `maxNumSeqs`: 1 to 64 |
 | `--max-num-batched-tokens` | Not set | `maxNumBatchedTokens`: 256 to 65536. This is the chunked prefill budget |
 
-`--max-model-len` (`maxModelLen`) stays the main control of the KV cache size. The `fp8` KV cache needs a qualification run for the model and the GPU ([#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453)). Until that run exists, the supervisor refuses `fp8`. The supervisor does not support CPU offload of the KV cache, disaggregated prefill or `--calculate-kv-scales`.
+`--max-model-len` (`maxModelLen`) stays the main control of the KV cache size. The `fp8` KV cache needs a qualification run for the model and the GPU ([#453](https://github.com/mickey-kras/llm-workload-supervisor/issues/453)). Until that run exists, the supervisor refuses `fp8`. The supervisor does not support CPU offload of the KV cache, disaggregated prefill or `--calculate-kv-scales`.
 
 Before preview and apply, setup runs `vllm serve --help=all` with the executable of the managed launch. A plain `--help` shows only the option groups. Setup reads at most 1 MiB of output and stops the command after 2 minutes. Setup refuses the launch if the help does not show an option or a rendered value. It never passes an unknown option to vLLM.
 
@@ -142,7 +142,7 @@ Adopted launches are grammar-bounded but not help-checked: by design, no pinned 
 
 In setup, the Launch details page of a managed vLLM launch has a "KV cache and batching" group. A new managed draft carries the pinned defaults, so the unit renders them explicitly from the first apply. An earlier draft without the object keeps its earlier bytes until the operator enables the group. Disabling the group restores the earlier bytes again.
 
-GPU memory use is 0.50 to 0.95, shown as the exact rendered value (default 0.90). Maximum concurrent sequences is 1 to 64. The chunked prefill budget is 256 to 65536 tokens. An empty field keeps the vLLM default, and the KV cache dtype stays `auto`. `fp8` needs a qualification run first ([#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453)). The diagnosis-only switch disables prefix caching (`--no-enable-prefix-caching`) and never combines with the prefix caching flags.
+GPU memory use is 0.50 to 0.95, shown as the exact rendered value (default 0.90). Maximum concurrent sequences is 1 to 64. The chunked prefill budget is 256 to 65536 tokens. An empty field keeps the vLLM default, and the KV cache dtype stays `auto`. `fp8` needs a qualification run first ([#453](https://github.com/mickey-kras/llm-workload-supervisor/issues/453)). The diagnosis-only switch disables prefix caching (`--no-enable-prefix-caching`) and never combines with the prefix caching flags.
 
 #### Capacity admission
 
@@ -779,7 +779,7 @@ The idle check sees only work that the supervisor admits. A job that bypasses th
 
 ## Demand activation and inactivity idle plan
 
-[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation, a 60-second timer and the idle transition. Policy defaults Off.
+[#144](https://github.com/mickey-kras/llm-workload-supervisor/issues/144) implements durable policy and settings, demand activation, a 60-second timer and the idle transition. Policy defaults Off.
 
 ### Placement
 
