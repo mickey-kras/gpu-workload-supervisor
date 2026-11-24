@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
 	"os"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func TestRemovedLlamaCPPCanBeDiscoveredAndRemoved(t *testing.T) {

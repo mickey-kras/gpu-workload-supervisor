@@ -10,8 +10,8 @@ const file = (filename, status = 'modified') => ({ filename, status,
 
 function fixture() {
   const pull = { number: 8, state: 'open', changed_files: 1,
-    head: { sha: HEAD, repo: { full_name: 'mickey-kras/gpu-workload-supervisor' } },
-    base: { sha: BASE, ref: 'main', repo: { full_name: 'mickey-kras/gpu-workload-supervisor' } } };
+    head: { sha: HEAD, repo: { full_name: 'mickey-kras/llm-workload-supervisor' } },
+    base: { sha: BASE, ref: 'main', repo: { full_name: 'mickey-kras/llm-workload-supervisor' } } };
   const state = { pull, files: [file('docs/OPERATOR.md')], outputs: [], logs: [], reads: 0 };
   const github = { rest: { pulls: {
     get: async () => { state.reads++; return { data: structuredClone(state.pull) }; }, listFiles() {},
@@ -21,7 +21,7 @@ function fixture() {
     return structuredClone(state.files);
   } };
   return { state, github, context: { eventName: 'pull_request', payload: { pull_request: structuredClone(pull) },
-    repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' } },
+    repo: { owner: 'mickey-kras', repo: 'llm-workload-supervisor' } },
   core: { setOutput: (name, value) => state.outputs.push([name, value]), info: value => state.logs.push(value) } };
 }
 

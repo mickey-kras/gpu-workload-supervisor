@@ -3,12 +3,12 @@ package setup
 import (
 	"context"
 	"errors"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 const execStartPropertyPrefix = "ExecStart="

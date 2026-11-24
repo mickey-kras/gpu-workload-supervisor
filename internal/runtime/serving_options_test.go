@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 const gpuFreeTotalCommand = "/usr/bin/true --query-gpu=memory.free,memory.total --format=csv,noheader,nounits -i 0"

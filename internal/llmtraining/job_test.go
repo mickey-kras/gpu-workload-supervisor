@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func jobFixture(t *testing.T) (Recipe, jobEnvelope, string, string) {

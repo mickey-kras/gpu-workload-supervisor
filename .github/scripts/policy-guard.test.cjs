@@ -1017,7 +1017,7 @@ function liveGuardFixture() {
   const pull = { number: 1, state: 'open', author_association: 'OWNER',
     user: { login: 'mickey-kras', id: 24433677, type: 'User' },
     head: { sha: 'b'.repeat(40) }, base: { sha: 'a'.repeat(40), ref: 'main' } };
-  const context = { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } };
+  const context = { repo: { owner: 'mickey-kras', repo: 'llm-workload-supervisor' }, payload: { pull_request: pull } };
   let reads = 0;
   const github = { paginate: async () => [], rest: {
     issues: { listComments() {} },

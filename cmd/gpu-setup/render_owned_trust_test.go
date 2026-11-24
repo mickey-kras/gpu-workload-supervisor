@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/setup"
 )
 
 // Use the real process boundary: an unsafe systemctl must never get the chance

@@ -1,5 +1,5 @@
 {
-  "name": "gpu-workload-supervisor-ci",
+  "name": "llm-workload-supervisor-ci",
   "version": "0.0.0",
   "private": true,
   "engines": {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
 )
 
 func executeTraining(ctx context.Context, c *supervisor.Controller, command, id string, target control.Workload) error {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 )
 
 // Discovery reports the escape routes as an advisory list. The scan uses

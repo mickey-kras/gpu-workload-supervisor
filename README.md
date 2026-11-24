@@ -1,4 +1,4 @@
-# GPU Workload Supervisor
+# LLM Workload Supervisor
 
 The supervisor switches one GPU between configured workloads (ComfyUI, vLLM).
 It stops and verifies the outgoing workload before starting the next, and

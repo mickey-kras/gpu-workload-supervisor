@@ -1,8 +1,8 @@
 package supervisor
 
 import (
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 )
 
 func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {

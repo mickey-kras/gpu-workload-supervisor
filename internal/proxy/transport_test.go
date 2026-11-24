@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 type rejectingDefaultTransport struct{ calls int }

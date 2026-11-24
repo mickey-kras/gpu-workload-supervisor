@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 // The policy tick runs the limit stop. With no unit with limits in

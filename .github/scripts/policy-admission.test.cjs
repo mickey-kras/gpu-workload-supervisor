@@ -10,7 +10,7 @@ const BASE = 'b'.repeat(40);
 const owner = { login: 'mickey-kras', id: 24433677, type: 'User' };
 const review = { id: 1, user: owner, commit_id: SHA, state: 'APPROVED' };
 const rule = { type: 'pull_request', ruleset_id: 123, ruleset_source_type: 'Repository',
-  ruleset_source: 'mickey-kras/gpu-workload-supervisor', parameters: {
+  ruleset_source: 'mickey-kras/llm-workload-supervisor', parameters: {
   require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
   require_last_push_approval: true, required_approving_review_count: 1,
 } };
@@ -19,7 +19,7 @@ function fixture() {
   const pull = { number: 1, state: 'open', user: { type: 'Bot', id: 456 },
     head: { sha: SHA }, base: { sha: BASE, ref: 'main' } };
   const state = { pull, current: pull, comments: [], reviews: [review], rules: [rule],
-    ruleset: { id: 123, source_type: 'Repository', source: 'mickey-kras/gpu-workload-supervisor',
+    ruleset: { id: 123, source_type: 'Repository', source: 'mickey-kras/llm-workload-supervisor',
       updated_at: '2026-10-23T00:00:00Z', enforcement: 'active', target: 'branch', bypass_actors: [], rules: [rule] },
     owners: '/.github/ @mickey-kras\n' };
   let calls = 0;
@@ -35,7 +35,7 @@ function fixture() {
     request: async () => ({ data: state.ruleset }),
     paginate: async route => route === github.rest.issues.listComments ? state.comments : typeof route === 'string' ? state.rules : state.reviews,
   };
-  return { state, github, context: { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } } };
+  return { state, github, context: { repo: { owner: 'mickey-kras', repo: 'llm-workload-supervisor' }, payload: { pull_request: pull } } };
 }
 
 test('admits only current owner approval with independently enforced review controls', async () => {
@@ -43,7 +43,7 @@ test('admits only current owner approval with independently enforced review cont
   assert.equal(await reviewedHead(f.github, f.context), true);
 });
 
-const settingsReview = values => JSON.stringify({ repository: 'mickey-kras/gpu-workload-supervisor',
+const settingsReview = values => JSON.stringify({ repository: 'mickey-kras/llm-workload-supervisor',
   ruleset_id: 123, updated_at: '2026-10-23T00:00:00Z', bypass_actors: [], ...values });
 
 test('redacted bypasses need the exact current administrator no-bypass readback', async () => {

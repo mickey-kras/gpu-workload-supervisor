@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/modelcheck"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 // allowCheckedModels stores a passing model check result for each vLLM

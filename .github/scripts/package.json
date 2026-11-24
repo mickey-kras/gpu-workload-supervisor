@@ -1,5 +1,5 @@
 {
-  "name": "gpu-workload-supervisor-governance",
+  "name": "llm-workload-supervisor-governance",
   "version": "0.0.0",
   "private": true,
   "dependencies": {

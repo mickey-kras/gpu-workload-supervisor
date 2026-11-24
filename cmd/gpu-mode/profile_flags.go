@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/operator"
 )
 
 const (

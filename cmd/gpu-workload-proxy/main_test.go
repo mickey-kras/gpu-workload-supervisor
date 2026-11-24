@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
+	workloadproxy "github.com/mickey-kras/llm-workload-supervisor/internal/proxy"
 )
 
 func TestRoutesFlagRequiresCanonicalMethodAndPath(t *testing.T) {

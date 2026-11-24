@@ -1,4 +1,4 @@
-module github.com/mickey-kras/gpu-workload-supervisor
+module github.com/mickey-kras/llm-workload-supervisor
 
 go 1.27.4
 

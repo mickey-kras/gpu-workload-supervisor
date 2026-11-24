@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func admitRetentionWork(t *testing.T, s *Store, ids ...string) control.State {

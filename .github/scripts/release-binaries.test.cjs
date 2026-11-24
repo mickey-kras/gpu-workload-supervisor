@@ -8,7 +8,7 @@ const YAML = require('yaml');
 // in one place fails CI until it is built, packaged and version-checked.
 const inventory = JSON.parse(readFileSync('packaging/release-binaries.json', 'utf8')).binaries;
 const names = inventory.map(binary => binary.name);
-const RELEASE_LDFLAG = '-s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}';
+const RELEASE_LDFLAG = '-s -w -X github.com/mickey-kras/llm-workload-supervisor/internal/deployment.Release={{ .Version }}';
 
 test('release inventory is unique and matches every cmd/ entry point', () => {
   assert.ok(inventory.every(binary => Object.keys(binary).sort().join() === 'activated,name' &&

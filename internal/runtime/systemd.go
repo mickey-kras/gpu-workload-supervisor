@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/httptransport"
 )
 
 // limitCleanupTimeout bounds the stop after a failed limit check in Start.

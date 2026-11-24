@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 var policyEpoch = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

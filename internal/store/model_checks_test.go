@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/modelcheck"
 )
 
 func modelCheckRecord(model string) modelcheck.Record {

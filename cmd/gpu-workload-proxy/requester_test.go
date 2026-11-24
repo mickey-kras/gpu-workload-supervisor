@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
-	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/operator"
+	workloadproxy "github.com/mickey-kras/llm-workload-supervisor/internal/proxy"
 	"os"
 	"path/filepath"
 	"testing"

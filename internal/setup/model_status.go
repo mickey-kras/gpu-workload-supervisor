@@ -13,8 +13,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/modelcheck"
 )
 
 // ModelStatusRequest asks for the model check status of the accepted

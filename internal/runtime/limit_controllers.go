@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // requiredControllers lists the cgroup controllers that apply the configured

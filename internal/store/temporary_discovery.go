@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 var ErrTemporaryCleanupRequired = errors.New("temporary discovery cleanup is required; inspect the persisted session and explicitly clean up its recorded invocation")

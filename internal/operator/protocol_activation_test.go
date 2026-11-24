@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 const activateRequest = `{"protocolVersion":1,"requestId":"r","action":"activate-workload","expected":{"incarnation":"i","version":"1","owner":"supervisor","configurationRevision":"c"},"target":"third"}`

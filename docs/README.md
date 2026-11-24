@@ -1,4 +1,4 @@
-# Documentation for GPU Workload Supervisor
+# Documentation for LLM Workload Supervisor
 
 [Repository](../README.md)
 

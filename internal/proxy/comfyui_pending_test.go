@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/httptransport"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 func TestComfyUICorrelatedPendingPollsAreQuietAndRemainUnfinished(t *testing.T) {

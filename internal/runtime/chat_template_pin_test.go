@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/modelcheck"
 )
 
 // TestChatTemplatePinMatchesTheBinding checks that the model check pin of a

@@ -13,9 +13,9 @@ const file = version => ({ type: 'file', encoding: 'base64',
   content: Buffer.from(json(version)).toString('base64') });
 
 function fixture() {
-  const fullName = 'mickey-kras/gpu-workload-supervisor';
+  const fullName = 'mickey-kras/llm-workload-supervisor';
   const context = { eventName: 'workflow_dispatch', ref: 'refs/heads/main', sha: RELEASE_SHA,
-    repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' } };
+    repo: { owner: 'mickey-kras', repo: 'llm-workload-supervisor' } };
   const release = { tag_name: `v${VERSION}`, immutable: true, draft: false, prerelease: false,
     assets: [`gpu-workload-supervisor-v${VERSION}.tar.gz`,
       `gpu-workload-supervisor_${VERSION}_linux_amd64.tar.gz`,
@@ -105,7 +105,7 @@ test('creates only the next version file and queues squash merge for its exact h
   await bumpReleasedVersion(input);
   assert.deepEqual(input.state.created[0].tree,
     [{ path: 'release-version.json', mode: '100644', type: 'blob', content: json(NEXT) }]);
-  assert.deepEqual(input.state.merged, [{ repository: 'mickey-kras/gpu-workload-supervisor', number: 8, sha: BUMP_SHA }]);
+  assert.deepEqual(input.state.merged, [{ repository: 'mickey-kras/llm-workload-supervisor', number: 8, sha: BUMP_SHA }]);
 });
 
 test('reuses the verified open bump PR without writing a second commit', async () => {

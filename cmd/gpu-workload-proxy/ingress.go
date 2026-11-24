@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
+	workloadproxy "github.com/mickey-kras/llm-workload-supervisor/internal/proxy"
 )
 
 func configureIngress(config *workloadproxy.Config, mode, executionFile, completionFile string) error {

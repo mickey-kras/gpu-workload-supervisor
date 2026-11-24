@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func ownedRenderProfile(runtimeName, id string, owned *control.OwnedLaunch) control.WorkloadProfile {

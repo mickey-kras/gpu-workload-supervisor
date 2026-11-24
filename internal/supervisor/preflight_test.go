@@ -3,7 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 	"testing"
 )
 

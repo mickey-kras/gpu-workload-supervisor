@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // These wrappers give tests direct access to production checks that the

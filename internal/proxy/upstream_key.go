@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/vllmkey"
 )
 
 var errUpstreamKey = errors.New("native model API key is not sent")

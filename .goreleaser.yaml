@@ -15,7 +15,7 @@ builds:
     main: ./cmd/gpu-mode
     binary: gpu-mode
     ldflags: &release-ldflags
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
+      - -s -w -X github.com/mickey-kras/llm-workload-supervisor/internal/deployment.Release={{ .Version }}
     env: &static-env [CGO_ENABLED=0]
     goos: &release-goos [linux]
     goarch: &release-goarch [amd64, arm64]
